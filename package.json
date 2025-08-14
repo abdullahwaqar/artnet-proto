@@ -8,6 +8,13 @@
         "type": "git",
         "url": "git+https://github.com/abdullahwaqar/artnet-proto.git"
     },
+    "keywords": [
+        "artnet",
+        "dmx",
+        "dmx512",
+        "rgb",
+        "Art-Net"
+    ],
     "type": "module",
     "main": "lib/index.js",
     "types": "lib/index.d.ts",
