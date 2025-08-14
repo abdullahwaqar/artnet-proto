@@ -113,13 +113,13 @@ Check working demo in [`examples/artnet-demo.ts`](examples/artnet-demo.ts):
 
 Compile TypeScript to `lib/`:
 
-```
+``` bash
 npm run build
 ```
 
 Clean build artifacts:
 
-```
+``` bash
 npm run clean
 ```
 
