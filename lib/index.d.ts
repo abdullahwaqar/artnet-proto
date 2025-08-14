@@ -27,22 +27,46 @@ export declare class Artnet extends EventEmitter {
      * Send an Art-Net trigger packet.
      * Reference: Art-Net 4 Spec, p40
      */
-    sendTrigger(oem: number, key: number, subKey: number, callback?: ArtnetCallback): void;
+    sendTrigger(
+        oem: number,
+        key: number,
+        subKey: number,
+        callback?: ArtnetCallback,
+    ): void;
     private triggerPackage;
     private startRefresh;
     /**
      * Send DMX data as ArtDmx packet.
      * Reference: Art-Net 4 Spec, p45 (ArtDmx Packet Definition)
      */
-    send(universe: number, refresh?: number | boolean, callback?: ArtnetCallback): void;
+    send(
+        universe: number,
+        refresh?: number | boolean,
+        callback?: ArtnetCallback,
+    ): void;
     private artdmxPackage;
-    set(universe: number, channel: number, value: number, callback?: ArtnetCallback): boolean;
-    set(universe: number, channel: number, values: number[], callback?: ArtnetCallback): boolean;
+    set(
+        universe: number,
+        channel: number,
+        value: number,
+        callback?: ArtnetCallback,
+    ): boolean;
+    set(
+        universe: number,
+        channel: number,
+        values: number[],
+        callback?: ArtnetCallback,
+    ): boolean;
     set(channel: number, value: number, callback?: ArtnetCallback): boolean;
     set(channel: number, values: number[], callback?: ArtnetCallback): boolean;
     set(value: number, callback?: ArtnetCallback): boolean;
     set(values: number[], callback?: ArtnetCallback): boolean;
-    trigger(oem: number, subKey: number, key: number, callback?: ArtnetCallback): boolean;
+    trigger(
+        oem: number,
+        subKey: number,
+        key: number,
+        callback?: ArtnetCallback,
+    ): boolean;
     trigger(subKey: number, key: number, callback?: ArtnetCallback): boolean;
     trigger(key: number, callback?: ArtnetCallback): boolean;
     /**
@@ -58,5 +82,4 @@ export declare class Artnet extends EventEmitter {
      */
     setPort(port: number): void;
 }
-export {};
 //# sourceMappingURL=index.d.ts.map

@@ -277,7 +277,10 @@ export class Artnet extends EventEmitter {
         }
 
         // Ensure universe exists
-        if (!this.data[universe]) this.data[universe] = Array(512).fill(0);
+        if (!this.data[universe]) {
+            this.data[universe] = Array(512).fill(0);
+        }
+
         this.dataChanged[universe] = this.dataChanged[universe] || 0;
 
         // Update data
@@ -383,10 +386,14 @@ export class Artnet extends EventEmitter {
      */
     public close(): void {
         for (const interval of this.interval) {
-            if (interval) clearInterval(interval);
+            if (interval) {
+                clearInterval(interval);
+            }
         }
         for (const throttle of this.sendThrottle) {
-            if (throttle) clearTimeout(throttle);
+            if (throttle) {
+                clearTimeout(throttle);
+            }
         }
         this.socket.close();
     }

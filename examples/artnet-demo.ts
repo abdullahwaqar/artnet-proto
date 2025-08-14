@@ -12,7 +12,10 @@ let c = 0;
 
 // Send to all 512 channels in universes 0–7 at ~25fps
 setInterval(() => {
-    if (++c > 255) c = 0;
+    if (++c > 255) {
+        c = 0;
+    }
+
     console.log(`Sending ${c} to all channels in all universes`);
 
     for (let i = 0; i < 8; i++) {
