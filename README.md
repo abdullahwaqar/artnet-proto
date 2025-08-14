@@ -3,6 +3,8 @@
 A modern **TypeScript** implementation of the [Art‑Net v4 protocol](https://art-net.org.uk/downloads/art-net.pdf) for DMX‑over‑IP communication.
 
 This library lets you send DMX512 channel data over a network to compatible lighting controllers and fixtures using Art‑Net.
+[![npm](https://img.shields.io/npm/v/artnet-proto.svg)](https://www.npmjs.com/package/artnet-proto)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/abdullahwaqar/artnet-proto/blob/master/LICENSE)
 
 ---
 
@@ -113,13 +115,13 @@ Check working demo in [`examples/artnet-demo.ts`](examples/artnet-demo.ts):
 
 Compile TypeScript to `lib/`:
 
-``` bash
+```bash
 npm run build
 ```
 
 Clean build artifacts:
 
-``` bash
+```bash
 npm run clean
 ```
 
