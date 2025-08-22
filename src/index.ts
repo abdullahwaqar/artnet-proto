@@ -9,6 +9,31 @@ interface ArtnetConfig {
     interface?: string;
 }
 
+/**
+ * Represents a discovered Art-Net node (device, which may be a fixture, gateway, or controller).
+ */
+interface ArtNetNodeInfo {
+    shortName: string;
+    longName: string;
+    nodeIp: string;
+    portCount: number;
+
+    /**
+     * First input port’s full 15-bit universe (Net<<8 | Sub<<4 | Chan) for quick access
+     */
+    universe: number;
+
+    /**
+     * Up to 4 input universes, one per input port (computed from Net/Sub + SwIn[0..3])
+     */
+    universesIn: number[];
+
+    /**
+     * Up to 4 output universes, one per output port (computed from Net/Sub + SwOut[0..3])
+     */
+    universesOut: number[];
+}
+
 type ArtnetCallback = (error: Error | null, bytes?: number) => void;
 
 /**
@@ -26,6 +51,11 @@ export class Artnet extends EventEmitter {
     private sendThrottle: (NodeJS.Timeout | undefined)[] = [];
     private sendDelayed: boolean[] = [];
     private dataChanged: number[] = [];
+    private discoveredNodes: {
+        ip: string;
+        port: number;
+        info: ArtNetNodeInfo;
+    }[] = [];
 
     constructor(config: ArtnetConfig = {}) {
         super();
@@ -161,7 +191,21 @@ export class Artnet extends EventEmitter {
         this.dataChanged[universe] = 0;
 
         // Send the packet
-        this.socket.send(buf, 0, buf.length, this.port, this.host, callback);
+        this.socket.send(
+            buf,
+            0,
+            buf.length,
+            this.port,
+            this.host,
+            (err, bytes) => {
+                if (typeof callback === "function") {
+                    callback(
+                        err,
+                        typeof bytes === "number" ? bytes : buf.length,
+                    );
+                }
+            },
+        );
     }
 
     private artdmxPackage(universe: number, length: number = 2): Buffer {
@@ -379,6 +423,169 @@ export class Artnet extends EventEmitter {
 
         this.sendTrigger(oem, key, subKey, callback);
         return true;
+    }
+
+    /**
+     * Discovers all Art-Net nodes (devices) present on the local network.
+     *
+     * Broadcasts an ArtPoll message and collects all ArtPollReply responses for the timeout period.
+     * Each discovered node provides IP address, short name, universes, and port info.
+     *
+     * @param timeout How long to wait for replies, in milliseconds (default: 2000ms).
+     * @returns Promise resolving with an array of discovered nodes.
+     */
+    public discoverNodes(
+        timeout: number = 2000,
+    ): Promise<{ ip: string; port: number; info: ArtNetNodeInfo }[]> {
+        return new Promise((resolve) => {
+            const socket = createSocket("udp4");
+            this.discoveredNodes = [];
+
+            // Handle incoming UDP messages (possible ArtPollReply packets)
+            socket.on("message", (msg: Buffer, rinfo) => {
+                if (msg.length < 12) {
+                    return;
+                }
+
+                // Check "Art-Net\0"
+                const isArtNet =
+                    msg[0] === 0x41 &&
+                    msg[1] === 0x72 &&
+                    msg[2] === 0x74 &&
+                    msg[3] === 0x2d &&
+                    msg[4] === 0x4e &&
+                    msg[5] === 0x65 &&
+                    msg[6] === 0x74 &&
+                    msg[7] === 0x00;
+
+                // ArtPollReply opcode 0x2100 (little-endian: 0x00, 0x21 at 8,9)
+                const isArtPollReply =
+                    isArtNet && msg[8] === 0x00 && msg[9] === 0x21;
+
+                if (!isArtPollReply) {
+                    return;
+                }
+
+                const info = this.parseArtPollReply(msg);
+                if (!this.discoveredNodes.some((n) => n.ip === rinfo.address)) {
+                    this.discoveredNodes.push({
+                        ip: rinfo.address,
+                        port: rinfo.port,
+                        info,
+                    });
+                }
+            });
+
+            // After timeout, stop listening and return discovered nodes
+            setTimeout(() => {
+                socket.close();
+                resolve(this.discoveredNodes);
+            }, timeout);
+
+            // Bind socket to standard Art-Net port and broadcast ArtPoll
+            socket.bind(6454, () => {
+                socket.setBroadcast(true);
+                const pollPacket = this.createArtPollPacket();
+                socket.send(
+                    pollPacket,
+                    0,
+                    pollPacket.length,
+                    6454,
+                    "255.255.255.255",
+                );
+            });
+        });
+    }
+
+    /**
+     * Generates a valid ArtPoll (discovery) UDP packet per Art-Net specification.
+     *
+     * @returns Buffer containing the ArtPoll packet.
+     */
+    private createArtPollPacket(): Buffer {
+        // "Art-Net" string (8 bytes), OpCode 0x2000 (ArtPoll), ProtVer 0x14, TalkToMe 0x00, Priority 0x00
+        return Buffer.from([
+            0x41,
+            0x72,
+            0x74,
+            0x2d,
+            0x4e,
+            0x65,
+            0x74,
+            0x00, // "Art-Net" + null terminator
+            0x20,
+            0x00, // OpCode: ArtPoll
+            0x14,
+            0x00, // ProtVer: 14
+            0x00, // TalkToMe
+            0x00, // Priority
+        ]);
+    }
+
+    /**
+     * Extracts important information from an ArtPollReply UDP packet.
+     *
+     * Offsets (bytes):
+     * -  0..7   : "Art-Net\0"
+     * -  8..9   : OpCode (reply == 0x2100, little-endian)
+     * - 10..13  : Node IP address
+     * - 18      : NetSwitch (7 bits used, 0..127)
+     * - 19      : SubSwitch (low nibble used, 0..15)
+     * - 26..43  : ShortName (18 bytes, null-terminated ASCII)
+     * - 44..107 : LongName (64 bytes, null-terminated ASCII)
+     * - 172..173: NumPorts (Hi, Lo)
+     * - 186..189: SwIn[0..3]  (low nibble == input universe/channel 0..15)
+     * - 190..193: SwOut[0..3] (low nibble == output universe/channel 0..15)
+     *
+     * Universe number (15-bit) is composed as:
+     *   universe = (NetSwitch << 8) | (SubSwitch << 4) | (PortNibble)
+     * Where PortNibble is low-nibble of SwIn[x] or SwOut[x].
+     *
+     * @param msg Buffer containing the ArtPollReply packet.
+     * @returns ArtNetNodeInfo object with extracted node/device details.
+     */
+    private parseArtPollReply(msg: Buffer): ArtNetNodeInfo {
+        const getString = (start: number, len: number): string =>
+            msg
+                .subarray(start, Math.min(start + len, msg.length))
+                .toString("ascii")
+                .replace(/\0.*$/, "")
+                .trim();
+
+        const nodeIp =
+            msg.length >= 14
+                ? `${msg[10]}.${msg[11]}.${msg[12]}.${msg[13]}`
+                : "0.0.0.0";
+
+        const net = msg.length > 18 ? msg[18] & 0x7f : 0; // 0..127
+        const sub = msg.length > 19 ? msg[19] & 0x0f : 0; // 0..15
+
+        // Port count: NumPortsHi/Lo at 172/173
+        const portCount = msg.length > 173 ? (msg[172] << 8) | msg[173] : 0;
+
+        // SwIn[0..3] and SwOut[0..3] (guard against short packets)
+        const swInBytes = msg.length >= 190 ? [...msg.subarray(186, 190)] : [];
+        const swOutBytes = msg.length >= 194 ? [...msg.subarray(190, 194)] : [];
+
+        // Compose full universes for each available port
+        const compose = (nibble: number) =>
+            (net << 8) | (sub << 4) | (nibble & 0x0f);
+        const universesIn = swInBytes.map((b) => compose(b & 0x0f));
+        const universesOut = swOutBytes.map((b) => compose(b & 0x0f));
+
+        // Keep the “first input port” universe for backward compatibility
+        const universe =
+            universesIn[0] ?? compose(msg.length > 186 ? msg[186] & 0x0f : 0);
+
+        return {
+            shortName: getString(26, 18),
+            longName: getString(44, 64),
+            nodeIp,
+            portCount,
+            universe,
+            universesIn,
+            universesOut,
+        };
     }
 
     /**

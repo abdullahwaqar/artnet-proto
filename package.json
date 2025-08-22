@@ -4,6 +4,7 @@
     "description": "A TypeScript library implementing the Art-Net protocol",
     "license": "MIT",
     "author": "Abdullah Waqar",
+    "homepage": "https://github.com/abdullahwaqar/artnet-proto",
     "repository": {
         "type": "git",
         "url": "git+https://github.com/abdullahwaqar/artnet-proto.git"
@@ -31,12 +32,12 @@
         "build": "tsc",
         "clean": "rm -rf lib",
         "prepublishOnly": "npm run clean && npm run build",
-        "dev": "ts-node --esm examples/artnet-demo.ts"
+        "dev": "tsx examples/artnet-demo.ts"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.2.0",
         "@types/node": "^24.2.1",
-        "ts-node": "^10.9.2",
+        "tsx": "^4.20.4",
         "typescript": "5.9"
     }
 }

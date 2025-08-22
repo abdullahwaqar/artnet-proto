@@ -16,7 +16,12 @@ This library lets you send DMX512 channel data over a network to compatible ligh
 - Optional throttling and periodic refresh
 - Broadcast or unicast output
 - `trigger()` support for ArtTrigger packets
+- **Discovery** of **Art-Net nodes** via **ArtPoll/ArtPollReply**
+  (parses `shortName`, `longName`, `nodeIp`, `portCount`, `universesIn`, `universesOut`)
 - Matches **Art‑Net 4** specification for byte‑perfect packet structure
+
+> [!note]
+> Discovery returns **nodes** (controllers/gateways), **not** individual DMX fixtures behind them. RDM is not implemented.
 
 ---
 
@@ -51,6 +56,25 @@ artnet.set(0, 1, [255, 0, 0]); // channels 1=R, 2=G, 3=B
 
 // Close when done
 setTimeout(() => artnet.close(), 5000);
+```
+
+## Discovery (ArtPoll / ArtPollReply)
+
+```typescript
+import { Artnet } from "artnet-proto";
+
+const artnet = new Artnet(...);
+const nodes = await artnet.discoverNodes(1500);
+
+for (const n of nodes) {
+  console.log(
+    `${n.info.shortName} @ ${n.ip} | ports=${n.info.portCount} ` +
+      `outs=[${n.info.universesOut.join(", ")}]`,
+  );
+}
+
+// Optional: switch to unicast → first node
+if (nodes[0]) artnet.setHost(nodes[0].ip);
 ```
 
 ---
@@ -100,6 +124,36 @@ Send an **ArtTrigger** packet (per spec p.40).
 
 ---
 
+### `.discoverNodes(timeoutMs = 2000): Promise<Array<{ ip, port, info }>>`
+
+Broadcasts ArtPoll, collects ArtPollReply, parses:
+
+```ts
+interface ArtNetNodeInfo {
+  shortName: string;
+  longName: string;
+  nodeIp: string;
+  portCount: number;
+  universe: number; // first input universe for convenience
+  universesIn: number[]; // from Net/Sub + SwIn[0..3] low nibble
+  universesOut: number[]; // from Net/Sub + SwOut[0..3] low nibble
+}
+```
+
+---
+
+### `.setHost(host: string): void`
+
+Change the destination IP (e.g., switch to unicast).
+
+---
+
+### `.setPort(port: number): void`
+
+Change UDP port (not allowed when `host` is global broadcast).
+
+---
+
 ### `.close()`
 
 Stop all timers and close the UDP socket.
@@ -131,6 +185,18 @@ npm run clean
 ## License
 
 See [LICENSE](LICENSE) for details.
+
+---
+
+## Notes / Limits
+
+- Discovery returns **nodes**, not fixtures (no RDM).
+
+- Ensure your node’s DMX output ports are mapped to the universes you’re sending.
+
+- Some fixtures need a **master dimmer** channel ≥ 1 in addition to RGB.
+
+- UDP has no delivery guarantee; if no error is reported, the frame was handed to the OS.
 
 ---
 
