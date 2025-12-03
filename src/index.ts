@@ -438,7 +438,7 @@ export class Artnet extends EventEmitter {
         timeout: number = 2000,
     ): Promise<{ ip: string; port: number; info: ArtNetNodeInfo }[]> {
         return new Promise((resolve) => {
-            const socket = createSocket({ type: 'udp4', reuseAddr: true } );
+            const socket = createSocket({ type: "udp4", reuseAddr: true });
             this.discoveredNodes = [];
 
             // Handle incoming UDP messages (possible ArtPollReply packets)
@@ -503,8 +503,8 @@ export class Artnet extends EventEmitter {
      * @returns Buffer containing the ArtPoll packet.
      */
     private createArtPollPacket(): Buffer {
-        const packet = Buffer.from( 'Art-Net\x000  \x0e\x00\x00', 'ascii' ); // OpPoll, ver 14
-        packet.writeUInt16LE( 0x2000, 8 ); // OpPoll = 0x2000 (little-endian in packet)
+        const packet = Buffer.from("Art-Net\x000  \x0e\x00\x00", "ascii"); // OpPoll, ver 14
+        packet.writeUInt16LE(0x2000, 8); // OpPoll = 0x2000 (little-endian in packet)
         return packet;
     }
 
@@ -534,10 +534,14 @@ export class Artnet extends EventEmitter {
         // Clean null-terminated ASCII strings and strip garbage (common on cheap nodes)
         function getString(start: number, length: number) {
             const end = msg.indexOf(0, start);
-            const raw = msg.subarray(start, end === -1 ? start + length : end).toString("ascii");
+            const raw = msg
+                .subarray(start, end === -1 ? start + length : end)
+                .toString("ascii");
+
             // eslint-disable-next-line no-control-regex
+            // biome-ignore lint/suspicious/noControlCharactersInRegex: __ignore
             return raw.replace(/[\x00-\x1F\x7F-\xFF]/g, "").trim();
-        };
+        }
 
         const nodeIp =
             msg.length >= 14
