@@ -19,7 +19,7 @@ interface ArtNetNodeInfo {
     portCount: number;
 
     /**
-     * First input port’s full 15-bit universe (Net<<8 | Sub<<4 | Chan) for quick access
+     * First input port's full 15-bit universe (Net<<8 | Sub<<4 | Chan) for quick access
      */
     universe: number;
 
@@ -331,23 +331,20 @@ export class Artnet extends EventEmitter {
         if (Array.isArray(value)) {
             for (let i = 0; i < value.length; i++) {
                 const index = channel + i - 1;
-                if (
-                    typeof value[i] === "number" &&
-                    this.data[universe][index] !== value[i]
-                ) {
+                if (typeof value[i] === "number") {
                     this.data[universe][index] = value[i];
                     if (index + 1 > this.dataChanged[universe]) {
                         this.dataChanged[universe] = index + 1;
                     }
                 }
             }
-        } else if (
-            typeof value === "number" &&
-            this.data[universe][channel - 1] !== value
-        ) {
-            this.data[universe][channel - 1] = value;
-            if (channel > this.dataChanged[universe]) {
-                this.dataChanged[universe] = channel;
+        } else if (typeof value === "number") {
+            // Single-channel path: retain change-detection (intentional — avoids flooding the bus when polling a channel that is already at the desired value).
+            if (this.data[universe][channel - 1] !== value) {
+                this.data[universe][channel - 1] = value;
+                if (channel > this.dataChanged[universe]) {
+                    this.dataChanged[universe] = channel;
+                }
             }
         }
 
@@ -564,7 +561,7 @@ export class Artnet extends EventEmitter {
         const universesIn = swInBytes.map((b) => compose(b & 0x0f));
         const universesOut = swOutBytes.map((b) => compose(b & 0x0f));
 
-        // Keep the “first input port” universe for backward compatibility
+        // Keep the "first input port" universe for backward compatibility
         const universe =
             universesIn[0] ?? compose(msg.length > 186 ? msg[186] & 0x0f : 0);
 
