@@ -15,7 +15,7 @@ interface ArtNetNodeInfo {
     nodeIp: string;
     portCount: number;
     /**
-     * First input port’s full 15-bit universe (Net<<8 | Sub<<4 | Chan) for quick access
+     * First input port's full 15-bit universe (Net<<8 | Sub<<4 | Chan) for quick access
      */
     universe: number;
     /**
