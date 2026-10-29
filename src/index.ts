@@ -10,11 +10,14 @@ const OP_POLL = 0x2000;
 const OP_POLL_REPLY = 0x2100;
 const OP_DMX = 0x5000;
 const OP_TRIGGER = 0x9900;
+const OP_SYNC = 0x5200;
 
 const GLOBAL_BROADCAST = "255.255.255.255";
 const DMX_CHANNELS = 512;
 const MAX_UNIVERSE = 0x7fff;
 const THROTTLE_MS = 25;
+/** Nodes leave synchronous mode after this long without an ArtSync. */
+const SYNC_TIMEOUT_MS = 4000;
 const CLOSED_MESSAGE = "Artnet instance is closed";
 
 export interface ArtnetConfig {
@@ -41,6 +44,32 @@ export interface ArtnetConfig {
      * Node.js process alive. Default `false`.
      */
     unref?: boolean;
+    /**
+     * Fill the ArtDmx Sequence field (1..255 per universe) so nodes can drop
+     * packets that arrive out of order. `false` sends 0, which disables the
+     * feature on the node. Default `true`.
+     */
+    sequence?: boolean;
+    /**
+     * Where ArtSync packets go. ArtSync must be broadcast, never unicast, so
+     * this defaults to `host` when that is a broadcast address, otherwise
+     * `255.255.255.255`. Set it to your network's directed broadcast
+     * (for example `"2.255.255.255"`) when sending DMX by unicast.
+     */
+    syncAddress?: string;
+}
+
+export interface CommitOptions {
+    /**
+     * Send an ArtSync after the universes, so nodes output them all at the
+     * same moment. Default `true`.
+     */
+    sync?: boolean;
+    /**
+     * Universes to send. Defaults to every universe with staged changes.
+     * Listed universes are sent even if nothing changed.
+     */
+    universes?: number[];
 }
 
 /**
@@ -245,12 +274,18 @@ export class Artnet extends EventEmitter {
     private socket: Socket;
     private closed = false;
     private bindReady: Promise<boolean> | null = null;
+    private useSequence: boolean;
+    private syncAddress: string | undefined;
+    private lastSyncAt = 0;
 
     private data = new Map<number, Uint8Array>();
     private dataChanged = new Map<number, number>();
     private refreshTimers = new Map<number, NodeJS.Timeout>();
     private throttleTimers = new Map<number, NodeJS.Timeout>();
     private pendingSends = new Map<number, PendingSend>();
+    private sequences = new Map<number, number>();
+    /** What nodes last received per universe, used for keep-alive. */
+    private sentData = new Map<number, Uint8Array>();
 
     private discoveryHandlers = new Set<MessageHandler>();
     private activeDiscoveries = new Set<() => void>();
@@ -264,6 +299,8 @@ export class Artnet extends EventEmitter {
         this.refresh = config.refresh ?? 1000;
         this.sendAll = config.sendAll ?? false;
         this.unref = config.unref ?? false;
+        this.useSequence = config.sequence ?? true;
+        this.syncAddress = config.syncAddress;
 
         this.socket = createSocket({ type: "udp4", reuseAddr: true });
 
@@ -409,7 +446,7 @@ export class Artnet extends EventEmitter {
                 setTimeout(() => {
                     this.refreshTimers.delete(universe);
                     if (!this.closed) {
-                        this.send(universe, true);
+                        this.sendRefresh(universe);
                     }
                 }, this.refresh),
             ),
@@ -493,14 +530,180 @@ export class Artnet extends EventEmitter {
             ),
         );
 
+        this.transmitUniverse(universe, refresh, callbacks);
+        // Nodes in synchronous mode hold ArtDmx until the next ArtSync
+        if (this.syncModeActive()) {
+            this.transmitSync([]);
+        }
+    }
+
+    /** Build and send one universe now, bypassing the throttle. */
+    private transmitUniverse(
+        universe: number,
+        refresh: boolean,
+        callbacks: ArtnetCallback[],
+    ): void {
         const changed = this.dataChanged.get(universe) ?? 0;
         // No recorded changes (manual send): send the full universe
         const length = refresh || changed === 0 ? DMX_CHANNELS : changed;
         this.dataChanged.set(universe, 0);
 
-        const buf = this.artdmxPackage(universe, length);
+        const data = this.universeData(universe);
+        const buf = this.artdmxPackage(universe, length, data);
+        this.sentData.set(universe, data.slice());
         this.transmit(this.socket, buf, this.port, this.host, callbacks);
         this.scheduleRefresh(universe);
+    }
+
+    /**
+     * Keep-alive: re-send what nodes last received, in full. Staged changes
+     * that haven't been committed are not included.
+     */
+    private sendRefresh(universe: number): void {
+        const data = this.sentData.get(universe) ?? this.universeData(universe);
+        const buf = this.artdmxPackage(universe, DMX_CHANNELS, data);
+        this.transmit(this.socket, buf, this.port, this.host, []);
+        if (this.syncModeActive()) {
+            this.transmitSync([]);
+        }
+        this.scheduleRefresh(universe);
+    }
+
+    /** Next ArtDmx sequence number for a universe: 1..255, wrapping. 0 if disabled. */
+    private nextSequence(universe: number): number {
+        if (!this.useSequence) {
+            return 0;
+        }
+        const next = ((this.sequences.get(universe) ?? 0) % 255) + 1;
+        this.sequences.set(universe, next);
+        return next;
+    }
+
+    /** True while nodes are likely still in synchronous mode from our last ArtSync. */
+    private syncModeActive(): boolean {
+        return (
+            this.lastSyncAt > 0 &&
+            Date.now() - this.lastSyncAt < SYNC_TIMEOUT_MS
+        );
+    }
+
+    private syncTarget(): string {
+        return (
+            this.syncAddress ??
+            (isBroadcastAddress(this.host) ? this.host : GLOBAL_BROADCAST)
+        );
+    }
+
+    private transmitSync(callbacks: ArtnetCallback[]): void {
+        this.lastSyncAt = Date.now();
+        this.transmit(
+            this.socket,
+            createArtSyncPacket(),
+            this.port,
+            this.syncTarget(),
+            callbacks,
+        );
+    }
+
+    /**
+     * Send an ArtSync now. Nodes that support it output all ArtDmx received
+     * since the previous ArtSync at the same moment.
+     * Reference: Art-Net 4 Spec, ArtSync
+     */
+    public sync(callback?: ArtnetCallback): void {
+        if (this.closed) {
+            callback?.(this.closedError());
+            return;
+        }
+        this.transmitSync(callback ? [callback] : []);
+    }
+
+    /**
+     * Write channel values without sending them. Send them with `commit()`.
+     * Same validation and clamping as `set()`.
+     * Returns `false` if the instance is closed.
+     * @example
+     * artnet.stage(0, 1, [255, 0, 0]);
+     * artnet.stage(1, 1, [0, 0, 255]);
+     * await artnet.commit(); // both universes, then ArtSync
+     */
+    public stage(
+        universe: number,
+        channel: number,
+        value: number | number[],
+    ): boolean {
+        assertUniverse(universe);
+        assertChannel(channel);
+        if (this.closed) {
+            return false;
+        }
+        this.write(universe, channel, value);
+        return true;
+    }
+
+    /**
+     * Send staged universes immediately (bypassing the 25ms throttle), then
+     * an ArtSync so nodes output them all at once.
+     *
+     * Any send queued by `set()` for the same universes is folded into this
+     * one, and its callbacks get this packet's result. Resolves when every
+     * packet has been handed to the OS; rejects with the first send error.
+     * Resolves without sending anything if there is nothing to send.
+     */
+    public commit(options: CommitOptions = {}): Promise<void> {
+        if (this.closed) {
+            return Promise.reject(this.closedError());
+        }
+
+        let universes: number[];
+        if (options.universes) {
+            for (const u of options.universes) {
+                assertUniverse(u);
+            }
+            universes = [...new Set(options.universes)];
+        } else {
+            universes = [...this.dataChanged.entries()]
+                .filter(([, changed]) => changed > 0)
+                .map(([u]) => u)
+                .sort((a, b) => a - b);
+        }
+
+        if (universes.length === 0) {
+            return Promise.resolve();
+        }
+
+        const sends: Promise<void>[] = [];
+        const settle =
+            (resolve: () => void, reject: (err: Error) => void) =>
+            (err: Error | null) =>
+                err ? reject(err) : resolve();
+
+        for (const universe of universes) {
+            const pending = this.pendingSends.get(universe);
+            this.pendingSends.delete(universe);
+            sends.push(
+                new Promise<void>((resolve, reject) => {
+                    this.transmitUniverse(
+                        universe,
+                        this.sendAll || (pending?.refresh ?? false),
+                        [
+                            ...(pending?.callbacks ?? []),
+                            settle(resolve, reject),
+                        ],
+                    );
+                }),
+            );
+        }
+
+        if (options.sync ?? true) {
+            sends.push(
+                new Promise<void>((resolve, reject) => {
+                    this.transmitSync([settle(resolve, reject)]);
+                }),
+            );
+        }
+
+        return Promise.all(sends).then(() => undefined);
     }
 
     private universeData(universe: number): Uint8Array {
@@ -512,7 +715,11 @@ export class Artnet extends EventEmitter {
         return data;
     }
 
-    private artdmxPackage(universe: number, length: number): Buffer {
+    private artdmxPackage(
+        universe: number,
+        length: number,
+        data: Uint8Array,
+    ): Buffer {
         // Length must be even, 2..512 (Art-Net 4, p45)
         if (length % 2) {
             length++;
@@ -523,12 +730,59 @@ export class Artnet extends EventEmitter {
         ARTNET_ID.copy(buf, 0);
         buf.writeUInt16LE(OP_DMX, 8);
         buf.writeUInt16BE(PROTOCOL_VERSION, 10);
-        // 12: Sequence (0 = disabled), 13: Physical
+        buf[12] = this.nextSequence(universe); // 0 = disabled
+        // 13: Physical
         buf[14] = universe & 0xff; // SubUni
         buf[15] = (universe >> 8) & 0x7f; // Net
         buf.writeUInt16BE(length, 16);
-        buf.set(this.universeData(universe).subarray(0, length), 18);
+        buf.set(data.subarray(0, length), 18);
         return buf;
+    }
+
+    /**
+     * Write values into a universe buffer. Returns the universe's highest
+     * changed channel since its last send (0 if nothing changed).
+     */
+    private write(
+        universe: number,
+        channel: number,
+        value: number | number[],
+    ): number {
+        const data = this.universeData(universe);
+        let changed = this.dataChanged.get(universe) ?? 0;
+
+        if (Array.isArray(value)) {
+            if (channel - 1 + value.length > DMX_CHANNELS) {
+                throw new RangeError(
+                    `${value.length} values starting at channel ${channel} run past channel ${DMX_CHANNELS}`,
+                );
+            }
+            for (let i = 0; i < value.length; i++) {
+                const v = value[i];
+                // Non-numbers (holes, null) leave the channel untouched
+                if (typeof v !== "number") {
+                    continue;
+                }
+                const index = channel - 1 + i;
+                data[index] = toDmxValue(v);
+                changed = Math.max(changed, index + 1);
+            }
+        } else if (typeof value === "number") {
+            // Single-channel path keeps change detection, so polling a channel
+            // that is already at the desired value doesn't flood the bus.
+            const v = toDmxValue(value);
+            if (data[channel - 1] !== v) {
+                data[channel - 1] = v;
+                changed = Math.max(changed, channel);
+            }
+        } else {
+            throw new TypeError(
+                "value must be a number or an array of numbers",
+            );
+        }
+
+        this.dataChanged.set(universe, changed);
+        return changed;
     }
 
     public set(
@@ -606,40 +860,7 @@ export class Artnet extends EventEmitter {
             return false;
         }
 
-        const data = this.universeData(universe);
-        let changed = this.dataChanged.get(universe) ?? 0;
-
-        if (Array.isArray(value)) {
-            if (channel - 1 + value.length > DMX_CHANNELS) {
-                throw new RangeError(
-                    `${value.length} values starting at channel ${channel} run past channel ${DMX_CHANNELS}`,
-                );
-            }
-            for (let i = 0; i < value.length; i++) {
-                const v = value[i];
-                // Non-numbers (holes, null) leave the channel untouched
-                if (typeof v !== "number") {
-                    continue;
-                }
-                const index = channel - 1 + i;
-                data[index] = toDmxValue(v);
-                changed = Math.max(changed, index + 1);
-            }
-        } else if (typeof value === "number") {
-            // Single-channel path keeps change detection, so polling a channel
-            // that is already at the desired value doesn't flood the bus.
-            const v = toDmxValue(value);
-            if (data[channel - 1] !== v) {
-                data[channel - 1] = v;
-                changed = Math.max(changed, channel);
-            }
-        } else {
-            throw new TypeError(
-                "value must be a number or an array of numbers",
-            );
-        }
-
-        this.dataChanged.set(universe, changed);
+        const changed = this.write(universe, channel, value);
 
         if (changed) {
             this.send(universe, false, callback);
@@ -978,6 +1199,17 @@ function createArtPollPacket(): Buffer {
     buf.writeUInt16LE(OP_POLL, 8);
     buf.writeUInt16BE(PROTOCOL_VERSION, 10);
     // 12: Flags = 0, 13: DiagPriority = 0
+    return buf;
+}
+
+/**
+ * ArtSync (Art-Net 4): ID, OpCode 0x5200, ProtVer 14, Aux1 = 0, Aux2 = 0.
+ */
+function createArtSyncPacket(): Buffer {
+    const buf = Buffer.alloc(14);
+    ARTNET_ID.copy(buf, 0);
+    buf.writeUInt16LE(OP_SYNC, 8);
+    buf.writeUInt16BE(PROTOCOL_VERSION, 10);
     return buf;
 }
 
