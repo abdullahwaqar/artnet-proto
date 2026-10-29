@@ -16,9 +16,11 @@ This library lets you send DMX512 channel data over a network to compatible ligh
 - Built-in send throttling (25ms per universe) and idle keep-alive refresh
 - Broadcast or unicast output
 - `trigger()` support for ArtTrigger packets
+- **ArtSync** frame sync: `stage()` several universes, `commit()` them, and nodes output them all at the same moment
+- ArtDmx **sequence numbers**, so nodes can drop packets that arrive out of order
 - **Discovery** of **Art-Net nodes** via **ArtPoll/ArtPollReply**
   (parses `shortName`, `longName`, `nodeIp`, `portCount`, `universesIn`, `universesOut`, merges multi-bind-index nodes)
-- Byte-exact ArtDmx, ArtTrigger and ArtPoll packets per the **Art‑Net 4** specification
+- Byte-exact ArtDmx, ArtSync, ArtTrigger and ArtPoll packets per the **Art‑Net 4** specification
 - Input validation: bad universes and channels throw, values are clamped to 0..255
 
 > [!note]
@@ -86,6 +88,29 @@ for (const n of nodes) {
 if (nodes[0]) artnet.setHost(nodes[0].ip);
 ```
 
+## Frame-synced output (ArtSync)
+
+When a fixture or pixel strip spans several universes, sending them one by one can show a visible tear for a frame. Stage the whole frame, then commit it: every universe goes out, followed by one ArtSync, and nodes that support ArtSync switch all of them together.
+
+```typescript
+const artnet = new Artnet({ host: "2.255.255.255" });
+artnet.on("error", console.error);
+
+setInterval(async () => {
+  artnet.stage(0, 1, frameFor(0)); // nothing is sent yet
+  artnet.stage(1, 1, frameFor(1));
+  artnet.stage(2, 1, frameFor(2));
+  await artnet.commit(); // universes 0, 1, 2, then ArtSync
+}, 25);
+```
+
+Nodes that don't support ArtSync ignore it and output each universe as it arrives, so this is safe to use with mixed hardware.
+
+> [!important]
+> A node that receives an ArtSync switches to **synchronous mode**: it holds incoming DMX until the next ArtSync, and only goes back to normal after 4 seconds without one. The library handles this for you. For 4 seconds after any ArtSync it sends, `set()` and keep-alive packets are also followed by an ArtSync, so they don't sit on the node for up to 4 seconds.
+
+ArtSync is always broadcast (the spec doesn't allow unicast). If you send DMX by unicast, set `syncAddress` to your network's directed broadcast address, for example `2.255.255.255`.
+
 ---
 
 ## API Reference
@@ -103,6 +128,8 @@ Creates a new Art‑Net sender instance.
 | `sendAll` | boolean | `false` | Always send all 512 channels |
 | `interface`| string | `undefined` | Local IPv4 address to bind to (e.g. `"2.0.0.1"`) |
 | `unref` | boolean | `false` | Don't let internal timers keep the process alive |
+| `sequence` | boolean | `true` | Fill the ArtDmx Sequence field (1..255 per universe). `false` sends 0, which disables it |
+| `syncAddress` | string | `host` if broadcast, else `255.255.255.255` | Where ArtSync packets go. Must be a broadcast address |
 
 > [!note]
 > When you set `interface`, use that network's directed broadcast address as `host` (for example `2.255.255.255`). On Linux, packets to `255.255.255.255` follow the default route, not the bound interface.
@@ -149,6 +176,35 @@ trigger(key: number, callback?: ArtnetCallback)                 // OEM 0xFFFF, s
 ```
 
 `oem` must be 0..0xFFFF, `key` and `subKey` 0..255.
+
+---
+
+### `.stage(universe, channel, value | values): boolean`
+
+Write channel values without sending them. Same validation and clamping as `set()`. Returns `false` if the instance is closed.
+
+Use `stage()` + `commit()` or `set()` for a given universe, not both: `set()` sends the whole changed range, including anything staged.
+
+---
+
+### `.commit(options?): Promise<void>`
+
+Send every universe with staged changes immediately (bypassing the throttle), then an ArtSync.
+
+| Option | Type | Default | Description |
+|-------------|------------|---------|-------------|
+| `sync` | boolean | `true` | Send an ArtSync after the universes |
+| `universes` | number[] | staged universes | Send exactly these universes, even if unchanged |
+
+- Any send that `set()` queued for the same universes is folded into this one, and its callbacks get this packet's result.
+- Resolves once every packet has been handed to the OS. Rejects with the first send error, or if the instance is closed. Throws `RangeError` for an invalid universe in `universes`.
+- Resolves without sending anything if there is nothing staged.
+
+---
+
+### `.sync(callback?)`
+
+Send an ArtSync now. Useful if you send universes with `send()` yourself and want to release them together.
 
 ---
 
@@ -213,6 +269,7 @@ Stop all timers and close the UDP socket. Safe to call more than once. Queued se
 
 - [`examples/artnet-demo.ts`](examples/artnet-demo.ts): sends full universes 0..7 at 25fps (`npm run dev`)
 - [`examples/send-all.ts`](examples/send-all.ts): discovers nodes, then sends a sliding colour pattern to their output universes (`npm run demo:discover`)
+- [`examples/sync-frames.ts`](examples/sync-frames.ts): a dot travelling across 4 universes as one strip, frame-synced with ArtSync (`npm run demo:sync`)
 
 ---
 
@@ -242,6 +299,10 @@ See [LICENSE](LICENSE) for details.
 - Some fixtures need a **master dimmer** channel ≥ 1 in addition to RGB.
 
 - UDP has no delivery guarantee; if no error is reported, the frame was handed to the OS.
+
+- Sequence numbers restart at 1 when your app restarts. A node that tracks sequences may drop packets for a moment until the counter passes the last value it saw (at most 255 packets, about 6 seconds at 40fps). If a node behaves badly after restarts, set `sequence: false`.
+
+- Sending the same universe from two controllers at once (or two `Artnet` instances) makes nodes merge them, and merging nodes ignore ArtSync.
 
 ---
 

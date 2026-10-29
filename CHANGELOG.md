@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.0
+
+### Added
+
+- **ArtSync frame sync.** `stage(universe, channel, value | values)` writes channels without sending. `commit(options?)` sends every staged universe at once, then an ArtSync, so nodes output them together. `sync()` sends an ArtSync on its own.
+- **Sync mode handling.** Nodes hold DMX after an ArtSync until the next one (or 4 seconds). For 4 seconds after any ArtSync, `set()` and keep-alive packets are followed by an ArtSync too, so mixing `set()` and `commit()` doesn't add lag.
+- **ArtDmx sequence numbers** (1..255 per universe, wrapping), on by default. Turn off with `sequence: false`.
+- `syncAddress` option for where ArtSync is broadcast (defaults to `host` when that's a broadcast address, otherwise `255.255.255.255`).
+- `CommitOptions` type export.
+- `examples/sync-frames.ts` and `npm run demo:sync`.
+
+### Changed
+
+- Keep-alive now re-sends what nodes last received, instead of the current buffer. Staged changes that haven't been committed no longer leak out through a keep-alive packet.
+- ArtDmx packets now carry a sequence number instead of 0. Nodes that track sequences may drop packets briefly after your app restarts; see the README notes.
+
 ## 1.1.0
 
 ### Fixed
