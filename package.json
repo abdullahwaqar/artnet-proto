@@ -1,6 +1,6 @@
 {
     "name": "artnet-proto",
-    "version": "1.0.5",
+    "version": "1.1.0",
     "description": "A TypeScript library implementing the Art-Net protocol",
     "license": "MIT",
     "author": "Abdullah Waqar",
@@ -17,22 +17,30 @@
         "Art-Net"
     ],
     "type": "module",
+    "engines": {
+        "node": ">=20"
+    },
     "main": "lib/index.js",
     "types": "lib/index.d.ts",
     "exports": {
         ".": {
-            "import": "./lib/index.js",
-            "require": "./lib/index.js"
+            "types": "./lib/index.d.ts",
+            "default": "./lib/index.js"
         }
     },
     "files": [
-        "lib/**/*"
+        "lib/**/*",
+        "CHANGELOG.md"
     ],
     "scripts": {
         "build": "tsc",
         "clean": "rm -rf lib",
-        "prepublishOnly": "npm run clean && npm run build",
-        "dev": "tsx examples/artnet-demo.ts"
+        "typecheck": "tsc --noEmit -p tsconfig.check.json",
+        "lint": "biome check src test examples",
+        "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
+        "prepublishOnly": "npm run clean && npm run lint && npm run typecheck && npm test && npm run build",
+        "dev": "tsx examples/artnet-demo.ts",
+        "demo:discover": "tsx examples/send-all.ts"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.2.0",

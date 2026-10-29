@@ -1,7 +1,7 @@
 {
     "compilerOptions": {
         "target": "ES2022",
-        "module": "ESNext",
+        "module": "NodeNext",
         "declaration": true,
         "declarationMap": true,
         "outDir": "./lib",
@@ -10,7 +10,7 @@
         "esModuleInterop": true,
         "skipLibCheck": true,
         "forceConsistentCasingInFileNames": true,
-        "moduleResolution": "Node",
+        "moduleResolution": "NodeNext",
         "isolatedModules": true,
         "resolveJsonModule": true,
         "noImplicitAny": true,

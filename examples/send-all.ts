@@ -1,12 +1,14 @@
 import { Artnet } from "../src/index";
 
 (async () => {
+    const host = "255.255.255.255";
     const artnet = new Artnet({
-        host: "255.255.255.255",
+        host,
         port: 6454,
-        refresh: 4000,
+        refresh: 1000,
         sendAll: false,
     });
+    artnet.on("error", (err) => console.error("Art-Net error:", err));
 
     console.log("Discovering Art-Net nodes…");
     const nodes = await artnet.discoverNodes(1500);
@@ -39,9 +41,7 @@ import { Artnet } from "../src/index";
 
     console.log(
         `Target universes: [${targetUniverses.join(", ")}] ` +
-            (artnet["host"] === "255.255.255.255"
-                ? "(broadcast)"
-                : "(unicast)"),
+            (host === "255.255.255.255" ? "(broadcast)" : "(unicast)"),
     );
 
     // --- DMX values ---

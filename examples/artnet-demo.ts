@@ -4,9 +4,10 @@ import { Artnet } from "../src/index";
 const artnet = new Artnet({
     host: "255.255.255.255", // broadcast
     port: 6454, // default Art-Net port
-    refresh: 4000, // resend every 4s
+    refresh: 1000, // keep-alive: resend idle universes every 1s
     sendAll: false,
 });
+artnet.on("error", (err) => console.error("Art-Net error:", err));
 
 let c = 0;
 
