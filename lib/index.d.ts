@@ -25,6 +25,31 @@ export interface ArtnetConfig {
      * Node.js process alive. Default `false`.
      */
     unref?: boolean;
+    /**
+     * Fill the ArtDmx Sequence field (1..255 per universe) so nodes can drop
+     * packets that arrive out of order. `false` sends 0, which disables the
+     * feature on the node. Default `true`.
+     */
+    sequence?: boolean;
+    /**
+     * Where ArtSync packets go. ArtSync must be broadcast, never unicast, so
+     * this defaults to `host` when that is a broadcast address, otherwise
+     * `255.255.255.255`. Set it to your network's directed broadcast
+     * (for example `"2.255.255.255"`) when sending DMX by unicast.
+     */
+    syncAddress?: string;
+}
+export interface CommitOptions {
+    /**
+     * Send an ArtSync after the universes, so nodes output them all at the
+     * same moment. Default `true`.
+     */
+    sync?: boolean;
+    /**
+     * Universes to send. Defaults to every universe with staged changes.
+     * Listed universes are sent even if nothing changed.
+     */
+    universes?: number[];
 }
 /**
  * Represents a discovered Art-Net node (device, which may be a fixture, gateway, or controller).
@@ -100,11 +125,17 @@ export declare class Artnet extends EventEmitter {
     private socket;
     private closed;
     private bindReady;
+    private useSequence;
+    private syncAddress;
+    private lastSyncAt;
     private data;
     private dataChanged;
     private refreshTimers;
     private throttleTimers;
     private pendingSends;
+    private sequences;
+    /** What nodes last received per universe, used for keep-alive. */
+    private sentData;
     private discoveryHandlers;
     private activeDiscoveries;
     private discoverySocket;
@@ -138,8 +169,52 @@ export declare class Artnet extends EventEmitter {
     send(universe: number, callback?: ArtnetCallback): void;
     send(universe: number, refresh?: boolean, callback?: ArtnetCallback): void;
     private flush;
+    /** Build and send one universe now, bypassing the throttle. */
+    private transmitUniverse;
+    /**
+     * Keep-alive: re-send what nodes last received, in full. Staged changes
+     * that haven't been committed are not included.
+     */
+    private sendRefresh;
+    /** Next ArtDmx sequence number for a universe: 1..255, wrapping. 0 if disabled. */
+    private nextSequence;
+    /** True while nodes are likely still in synchronous mode from our last ArtSync. */
+    private syncModeActive;
+    private syncTarget;
+    private transmitSync;
+    /**
+     * Send an ArtSync now. Nodes that support it output all ArtDmx received
+     * since the previous ArtSync at the same moment.
+     * Reference: Art-Net 4 Spec, ArtSync
+     */
+    sync(callback?: ArtnetCallback): void;
+    /**
+     * Write channel values without sending them. Send them with `commit()`.
+     * Same validation and clamping as `set()`.
+     * Returns `false` if the instance is closed.
+     * @example
+     * artnet.stage(0, 1, [255, 0, 0]);
+     * artnet.stage(1, 1, [0, 0, 255]);
+     * await artnet.commit(); // both universes, then ArtSync
+     */
+    stage(universe: number, channel: number, value: number | number[]): boolean;
+    /**
+     * Send staged universes immediately (bypassing the 25ms throttle), then
+     * an ArtSync so nodes output them all at once.
+     *
+     * Any send queued by `set()` for the same universes is folded into this
+     * one, and its callbacks get this packet's result. Resolves when every
+     * packet has been handed to the OS; rejects with the first send error.
+     * Resolves without sending anything if there is nothing to send.
+     */
+    commit(options?: CommitOptions): Promise<void>;
     private universeData;
     private artdmxPackage;
+    /**
+     * Write values into a universe buffer. Returns the universe's highest
+     * changed channel since its last send (0 if nothing changed).
+     */
+    private write;
     set(universe: number, channel: number, value: number, callback?: ArtnetCallback): boolean;
     set(universe: number, channel: number, values: number[], callback?: ArtnetCallback): boolean;
     set(channel: number, value: number, callback?: ArtnetCallback): boolean;
